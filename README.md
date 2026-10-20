@@ -90,6 +90,8 @@ env_key = "DEEPSEEK_API_KEY"
 
 ## 集成终端 Shell（PowerShell 7 识别）
 
+*新版的codex会在本机缓存自带运行时包~/.cache/codex-runtimes，自带pwsh，一般不需要自己再安装*
+
 ### 标准安装办法（推荐）
 
 必须装成**普通文件系统里的真实可执行文件**，且目录要在 `PATH` 里。
