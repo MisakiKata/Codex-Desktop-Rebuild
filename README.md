@@ -88,6 +88,50 @@ env_key = "DEEPSEEK_API_KEY"
 - 顶层 `model_provider` 是单值而非 map，**不支持 per-model provider** —— 不能「列表里混着官方和第三方、选谁走谁」。不设它则强制走 ChatGPT 账号通道，第三方模型会被服务器拒绝。
 - `web_search` 的 MCP 端点仍在 `chatgpt.com`（Rust 侧写死），所以效果是「第三方模型也能用官方的 web_search」，要求账号保持 ChatGPT 登录。
 
+## 集成终端 Shell（PowerShell 7 识别）
+
+### 标准安装办法（推荐）
+
+必须装成**普通文件系统里的真实可执行文件**，且目录要在 `PATH` 里。
+
+#### 方式一：MSI（需管理员，最标准）
+
+```powershell
+winget install --id Microsoft.PowerShell --exact --source winget --scope machine
+```
+
+装到 `C:\Program Files\PowerShell\7\pwsh.exe`，并自动写入机器级 `PATH`。
+
+> `winget install` 若走Store 源会装成 MSIX（无效）。**务必加
+> `--source winget` 走社区源的 MSI 包。**
+
+#### 方式二：ZIP 免安装（无需管理员，推荐给无管理员权限的场景）
+
+MSI 不支持 per-user 安装（`--scope user` 会失败），非管理员环境下用官方 ZIP：
+
+```powershell
+# 1. 下载（GitHub 直连不通时加 --proxy）
+$ver = "7.6.7"
+curl.exe -L --proxy http://127.0.0.1:10809 -o "$env:TEMP\pwsh.zip" `
+  "https://github.com/PowerShell/PowerShell/releases/download/v$ver/PowerShell-$ver-win-x64.zip"
+
+# 2. 解压到用户目录（PATH 里已有的位置）
+$dst = "$env:LOCALAPPDATA\Programs\PowerShell\7"
+Expand-Archive "$env:TEMP\pwsh.zip" -DestinationPath $dst -Force
+
+# 3. 手动写入用户级 PATH（ZIP 版不会自动加）
+$p = [Environment]::GetEnvironmentVariable("PATH", "User")
+if ($p -notlike "*PowerShell\7*") {
+  [Environment]::SetEnvironmentVariable("PATH", "$dst;$p", "User")
+}
+
+# 4. 验证
+& "$dst\pwsh.exe" -NoProfile -Command '$PSVersionTable.PSVersion'
+```
+
+> 压缩包里 `pwsh.exe` 只有约 294 KB，这是正常的 —— 它是启动器，
+> 真正的实现在同目录的 `pwsh.dll` 里。
+
 ## 构建
 
 ```bash
