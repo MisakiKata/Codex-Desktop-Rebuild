@@ -119,6 +119,27 @@ function findGoalGatePatches(ast, source) {
   return patches;
 }
 
+/**
+ * Nested `&&` chains can match at several depths. Applying every match with
+ * stale offsets corrupts the file, so keep the outermost patch of each nested
+ * group and drop anything that overlaps an already-kept range.
+ */
+function selectNonOverlapping(patches) {
+  const sorted = [...patches].sort((a, b) => a.start - b.start || b.end - a.end);
+  const kept = [];
+  const skipped = [];
+  let lastEnd = -1;
+  for (const p of sorted) {
+    if (p.start < lastEnd) {
+      skipped.push(p);
+      continue;
+    }
+    kept.push(p);
+    lastEnd = p.end;
+  }
+  return { kept, skipped };
+}
+
 // ── Rule 2: Bypass Statsig gates in browser/computer-use availability hooks ──
 // These hooks moved into app-initial-*.js; filename-based targeting no longer
 // works. Match structurally instead: a function that declares a featureName for
@@ -474,24 +495,41 @@ function main() {
       continue;
     }
 
+    const { kept, skipped } = selectNonOverlapping(patches);
+    if (skipped.length > 0) {
+      console.log(`   [!] skipped ${skipped.length} overlapping patch(es), kept outermost`);
+      for (const p of skipped)
+        console.log(`       - [${p.id}] offset ${p.start}-${p.end}`);
+    }
+
     if (isCheck) {
-      for (const p of patches)
+      for (const p of kept)
         console.log(`   [?] [${p.id}] offset ${p.start}: ${p.original} -> ${p.replacement}`);
       continue;
     }
 
-    patches.sort((a, b) => b.start - a.start);
+    kept.sort((a, b) => b.start - a.start);
     let code = source;
-    for (const p of patches) {
+    for (const p of kept) {
       console.log(`   * [${p.id}] offset ${p.start}: ${p.original} -> ${p.replacement}`);
       code = code.slice(0, p.start) + p.replacement + code.slice(p.end);
     }
 
+    // Never write output that no longer parses. This covers every rule, not
+    // just the availability hooks.
+    let afterAst;
+    try {
+      afterAst = parse(code, { ecmaVersion: "latest", sourceType: "module" });
+    } catch (e) {
+      console.error(`   [x] patched output failed to parse (${e.message}); file not written`);
+      failed = true;
+      continue;
+    }
+
     fs.writeFileSync(bundle.path, code, "utf-8");
-    console.log(`   [ok] ${patches.length} gates patched`);
+    console.log(`   [ok] ${kept.length} gates patched`);
 
     if (bundle.rules.includes("availgate")) {
-      const afterAst = parse(code, { ecmaVersion: "latest", sourceType: "module" });
       const remainingAfter = findRemainingHookGateIds(afterAst, code);
       if (remainingAfter.length > 0) {
         console.error(
@@ -505,4 +543,6 @@ function main() {
   if (failed) process.exit(1);
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = { findGoalGatePatches, selectNonOverlapping };

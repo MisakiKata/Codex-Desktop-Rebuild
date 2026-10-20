@@ -246,10 +246,37 @@ function buildWin(platform) {
   // Copy app/ to output
   const outAppDir = path.join(OUT_DIR, "win");
   const outApp = path.join(outAppDir, "Codex-win32-x64");
+
+  // The MSIX cache host exe may lack the ASAR integrity manifest. Keep the
+  // manifest-bearing exe from the previous build instead of overwriting it.
+  const savedManifestExes = [];
+  if (fs.existsSync(outApp)) {
+    for (const e of fs.readdirSync(outApp, { withFileTypes: true })) {
+      if (!e.isFile() || !e.name.toLowerCase().endsWith(".exe")) continue;
+      const p = path.join(outApp, e.name);
+      const buf = fs.readFileSync(p);
+      if (buf.includes(Buffer.from(ASAR_MANIFEST_VALUE_PREFIX, "ascii"))) {
+        savedManifestExes.push({ name: e.name, buf });
+      }
+    }
+  }
+
   console.log("   [copy] MSIX app/ -> out/");
   // copyRecursive overwrites in place, so an existing tree is refreshed
   // without needing a bulk delete (which filesystem guards may block).
   copyRecursive(appDir, outApp);
+
+  for (const { name, buf } of savedManifestExes) {
+    const dest = path.join(outApp, name);
+    const current = fs.existsSync(dest) ? fs.readFileSync(dest) : null;
+    if (
+      !current ||
+      !current.includes(Buffer.from(ASAR_MANIFEST_VALUE_PREFIX, "ascii"))
+    ) {
+      fs.writeFileSync(dest, buf);
+      console.log(`   [integrity] restored ${name} with asar manifest`);
+    }
+  }
 
   const resourcesDir = path.join(outApp, "resources");
 
@@ -266,8 +293,14 @@ function buildWin(platform) {
   const newHash = computeAsarHeaderHash(asarPath);
   console.log(`   [integrity] new hash: ${newHash.slice(0, 16)}...`);
 
-  if (oldHash !== newHash) {
-    patchExeHash(outApp, oldHash, newHash);
+  // Always reconcile the manifest, not only when the hash changed: a restored
+  // host exe may carry a hash from a different app.asar revision.
+  const patched = patchExeManifestHash(outApp, newHash);
+  if (patched === 0) {
+    console.error(
+      "[x] no ASAR integrity manifest found in any exe; refusing to emit an unloadable build",
+    );
+    process.exit(1);
   }
 
   // Replace codex CLI
@@ -334,13 +367,20 @@ function computeAsarHeaderHash(asarPath) {
  * The host exe is not always Codex.exe (newer MSIX builds ship ChatGPT.exe as
  * the Electron host), so every candidate exe is scanned.
  */
-function patchExeHash(outAppDir, oldHash, newHash) {
-  if (oldHash.length !== newHash.length) {
-    console.log(`   [!] hash length mismatch, skipping exe patch`);
+const ASAR_MANIFEST_VALUE_PREFIX = '"alg":"SHA256","value":"';
+
+/**
+ * Patch the ASAR integrity manifest value in every exe that carries one.
+ * This does not rely on the previous hash string, so it also works when the
+ * preserved host exe was built against a different app.asar revision.
+ */
+function patchExeManifestHash(outAppDir, newHash) {
+  if (!/^[0-9a-f]{64}$/i.test(newHash)) {
+    console.log("   [!] invalid asar hash, skipping exe patch");
     return 0;
   }
 
-  const oldHex = Buffer.from(oldHash, "ascii");
+  const prefix = Buffer.from(ASAR_MANIFEST_VALUE_PREFIX, "ascii");
   let patched = 0;
 
   const candidates = fs
@@ -350,18 +390,21 @@ function patchExeHash(outAppDir, oldHash, newHash) {
 
   for (const exePath of candidates) {
     const buf = fs.readFileSync(exePath);
-    const idx = buf.indexOf(oldHex);
+    const idx = buf.indexOf(prefix);
     if (idx < 0) continue;
 
-    Buffer.from(newHash, "ascii").copy(buf, idx);
+    const valueStart = idx + prefix.length;
+    const current = buf.slice(valueStart, valueStart + 64).toString("ascii");
+    if (!/^[0-9a-f]{64}$/i.test(current)) continue;
+
+    Buffer.from(newHash, "ascii").copy(buf, valueStart);
     fs.writeFileSync(exePath, buf);
-    console.log(`   [integrity] ${path.basename(exePath)} hash patched at offset ${idx}`);
+    console.log(
+      `   [integrity] ${path.basename(exePath)} manifest ${current.slice(0, 16)}... -> ${newHash.slice(0, 16)}...`,
+    );
     patched++;
   }
 
-  if (patched === 0) {
-    console.log("   [!] asar integrity manifest not found in any exe");
-  }
   return patched;
 }
 

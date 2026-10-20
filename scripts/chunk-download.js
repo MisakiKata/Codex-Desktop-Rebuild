@@ -6,9 +6,11 @@
  */
 const fs = require("fs");
 const path = require("path");
-const https = require("http");
+const https = require("https");
 const http = require("http");
 const { URL } = require("url");
+
+const MAX_REDIRECTS = 5;
 
 const [, , urlStr, dest, totalStr, chunkMbStr] = process.argv;
 if (!urlStr || !dest) {
@@ -19,13 +21,18 @@ if (!urlStr || !dest) {
 const TOTAL = Number(totalStr || 0);
 const CHUNK = (Number(chunkMbStr || 8)) * 1024 * 1024;
 
-function get(headers) {
+function get(url, headers, redirects = MAX_REDIRECTS) {
   return new Promise((resolve, reject) => {
-    const mod = urlStr.startsWith("https") ? https : http;
-    const req = mod.get(urlStr, { headers, timeout: 60000 }, (res) => {
+    const protocol = new URL(url).protocol;
+    const mod = protocol === "https:" ? https : protocol === "http:" ? http : null;
+    if (!mod) return reject(new Error(`unsupported protocol: ${protocol}`));
+
+    const req = mod.get(url, { headers, timeout: 60000 }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();
-        return resolve(get({ ...headers }));
+        if (redirects <= 0) return reject(new Error("too many redirects"));
+        const next = new URL(res.headers.location, url).href;
+        return resolve(get(next, headers, redirects - 1));
       }
       resolve(res);
     });
@@ -35,7 +42,7 @@ function get(headers) {
 }
 
 async function head() {
-  const res = await get({});
+  const res = await get(urlStr, {});
   res.resume();
   return Number(res.headers["content-length"] || 0);
 }
@@ -64,7 +71,7 @@ async function main() {
 
     for (let attempt = 0; attempt < 4 && !ok; attempt++) {
       try {
-        const res = await get({ Range: `bytes=${start}-${end}` });
+        const res = await get(urlStr, { Range: `bytes=${start}-${end}` });
         if (res.statusCode !== 206 && res.statusCode !== 200) {
           res.resume();
           throw new Error(`HTTP ${res.statusCode}`);

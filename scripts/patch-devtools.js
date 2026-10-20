@@ -40,6 +40,33 @@ function getPropertyName(node) {
   return null;
 }
 
+const LOG_METHODS = new Set(["info", "warn", "error", "debug", "log", "trace"]);
+
+/** True when a property lives inside a logger payload rather than app options. */
+function isLogContext(node, parents) {
+  let cur = node;
+  for (let i = 0; i < 16; i++) {
+    const parent = parents.get(cur);
+    if (!parent) return false;
+    if (parent.type === "Property") {
+      const key = getPropertyName(parent.key);
+      if (key === "safe" || key === "sensitive") return true;
+    }
+    if (parent.type === "CallExpression") {
+      const callee = parent.callee;
+      const name =
+        callee?.type === "MemberExpression"
+          ? getPropertyName(callee.property)
+          : callee?.type === "Identifier"
+            ? callee.name
+            : null;
+      if (name && LOG_METHODS.has(name)) return true;
+    }
+    cur = parent;
+  }
+  return false;
+}
+
 // ──────────────────────────────────────────────
 //  Declarative rules
 // ──────────────────────────────────────────────
@@ -108,8 +135,15 @@ function main() {
     const patches = [];
     const seen = new Set();
 
+    const parents = new WeakMap();
+    walkAST(ast, (node, parent) => {
+      if (parent) parents.set(node, parent);
+    });
+
     walkAST(ast, (node, parent) => {
       for (const rule of RULES) {
+        if (rule.id === "allowInspectElement" && isLogContext(node, parents))
+          continue;
         const result = rule.match(node, source, parent);
         if (!result) continue;
         const key = `${result.start}:${result.end}`;

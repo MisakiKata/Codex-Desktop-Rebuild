@@ -1,6 +1,18 @@
 # Statsig 云控映射表
 
-> 通过 AST 分析 `index-MmO6ZWIv.js` 提取，ID 为 Statsig DJB2 哈希值（`(hash << 5) - hash + charCode`），原始名称仅存于服务端。
+> 历史 gate 列表来自旧版 `index-MmO6ZWIv.js` 的 AST 分析；ID 为 Statsig DJB2 哈希值（`(hash << 5) - hash + charCode`），原始名称仅存于服务端。
+>
+> 26.1013+ 的 browser/computer-use availability hook 已移入 `app-initial-*.js`，当前补丁实际使用的 gate 见下方「当前 availability gates」。
+
+## 当前 availability gates（26.1013+）
+
+| ID | 功能 | 组件 / 判定参数 |
+|---|---|---|
+| `410262010` | `browser_use` availability | `dRn` → `isBrowserAgentGateEnabled` |
+| `410065390` | `browser_use_external` availability | `sRn` → `isExternalBrowserUseGateEnabled` |
+| `1506311413` | `computer_use` availability | `kLn` → `isComputerUseGateEnabled` |
+
+`patch-plugin-auth.js` 会按 `featureName` + `is*GateEnabled` 结构定位这三个 hook，把其中的数字 gate 调用替换为 `!0`。
 
 ## Feature Gates (30)
 
@@ -75,16 +87,18 @@ gate 2307253562 → codex_git_commit
 | `3902942138` | Git Commit 特性层 | `HUn` | `codex_git_commit` 相关 |
 | 其余 3 个 | *(server-only)* | — | |
 
-## Patch 脚本
+## 当前 Patch 脚本
 
 | 脚本 | 目标 | 策略 |
 |---|---|---|
-| `patch-sunset.js` | gate `2929582856` | `Cs(i)` → `!1`，短路 sunset 守卫 |
-| `patch-statsig-logger.js` | `_setStatus()` | 注入日志，打印所有 gates/configs/layers 值 |
-| `patch-i18n.js` | `qNe()` | 注入 `en-US` 到语言选择器列表 |
-| `patch-devtools.js` | `allowInspectElement` / `devTools` | 属性值 → `!0` |
-| `patch-copyright.js` | About Dialog / setAboutPanelOptions | 替换版权文本 |
-| `patch-process-polyfill.js` | Windows `process` polyfill | 注入 `process.env`/`process.platform` |
+| `patch-sunset.js` | gate `2929582856`（sunset guard） | 数字 gate 调用 → `!1`，短路遮罩 |
+| `patch-i18n.js` | Statsig layer `enable_i18n` | `.get("enable_i18n", ...)` → `!0` |
+| `patch-devtools.js` | `allowInspectElement` / `devTools` | 应用配置对象的值 → `!0`（跳过日志对象） |
+| `patch-plugin-auth.js` | availability gates / feature defaults / bundled plugins / peer auth | gate 调用 → `!0`；`!1` → `!0`；filter → `()=>!0`；peer auth 条件 → `!0` |
+| `patch-updater.js` | `shouldIncludeSparkle` / `shouldIncludeWindowsUpdater` / `shouldIncludeWindowsMsixUpdater` / `shouldIncludeUpdater` | 返回值 → `!1` |
+| `patch-websearch-mcp.js` | provider / model-name / catalog 三道 web_search 门控 | 锚点表达式替换，门控各自独立标记 |
+| `patch-proxy.js` | `early-bootstrap.js` | 注入代理配置 IIFE（Chromium switch + 子进程 env） |
+| `patch-gpu.js` | mac-x64 `bootstrap.js` | 文件头注入 `force_high_performance_gpu` |
 
 ## 备注
 

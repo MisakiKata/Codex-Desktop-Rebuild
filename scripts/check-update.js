@@ -55,10 +55,10 @@ function httpsGet(url) {
 }
 
 // ─── macOS: Sparkle appcast ──────────────────────────────────────
-async function checkMacArm64Version() { return checkAppcast(APPCAST_ARM64, "macOS-arm64"); }
-async function checkMacX64Version() { return checkAppcast(APPCAST_X64, "macOS-x64"); }
+async function checkMacArm64Version() { return checkAppcast(APPCAST_ARM64, "macOS-arm64", "mac-arm64"); }
+async function checkMacX64Version() { return checkAppcast(APPCAST_X64, "macOS-x64", "mac-x64"); }
 
-async function checkAppcast(url, platformLabel) {
+async function checkAppcast(url, platformLabel, key) {
   const res = await httpsGet(url);
   if (res.status !== 200) {
     throw new Error(`appcast.xml 请求失败: HTTP ${res.status}`);
@@ -81,6 +81,7 @@ async function checkAppcast(url, platformLabel) {
   if (Array.isArray(enclosure)) enclosure = enclosure[0];
 
   return {
+    key,
     platform: platformLabel,
     version: latest.shortVersionString || latest.title,
     build: String(latest.version || ""),
@@ -127,6 +128,7 @@ async function checkWindowsVersion() {
   );
 
   return {
+    key: "win",
     platform: "Windows",
     version,
     build: "",
@@ -180,7 +182,7 @@ async function main() {
     if (r.status === "fulfilled") {
       const info = r.value;
       results.push(info);
-      const key = info.platform;
+      const key = info.key;
       const isNew = !saved[key] || saved[key].version !== info.version || saved[key].build !== info.build;
       if (isNew) updates.push(info);
     } else if (!quiet) {
@@ -193,7 +195,7 @@ async function main() {
     const output = {
       timestamp: new Date().toISOString(),
       hasUpdates: updates.length > 0,
-      platforms: Object.fromEntries(results.map((r) => [r.platform, r])),
+      platforms: Object.fromEntries(results.map((r) => [r.key, r])),
       previous: saved,
     };
     console.log(JSON.stringify(output, null, 2));
@@ -206,13 +208,14 @@ async function main() {
     } else {
       for (const info of toShow) {
         const isUpdate = updates.includes(info);
-        const prevVersion = saved[info.platform]?.version || "无记录";
+        const prev = saved[info.key];
+        const prevVersion = prev?.version || "无记录";
         const tag = isUpdate ? "🆕 新版本" : "📌 当前版本";
 
         console.log(`${tag} [${info.platform}]`);
         console.log(`  版本: ${info.version}${info.build ? ` (build ${info.build})` : ""}`);
         if (isUpdate && prevVersion !== "无记录") {
-          console.log(`  旧版: ${prevVersion}${saved[info.platform]?.build ? ` (build ${saved[info.platform].build})` : ""}`);
+          console.log(`  旧版: ${prevVersion}${prev.build ? ` (build ${prev.build})` : ""}`);
         }
         if (info.pubDate) console.log(`  发布: ${info.pubDate}`);
         console.log(`  大小: ${formatSize(info.size)}`);
@@ -229,9 +232,9 @@ async function main() {
   if (doSave && results.length > 0) {
     const newSaved = { ...saved };
     for (const r of results) {
-      newSaved[r.platform] = {
+      newSaved[r.key] = {
         version: r.version,
-        build: r.build || undefined,
+        build: r.build || "",
         checkedAt: new Date().toISOString(),
       };
     }

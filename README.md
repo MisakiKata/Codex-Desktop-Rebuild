@@ -8,29 +8,31 @@
 
 ## 补丁
 
-按 `scripts/patch-all.js` 的顺序执行，共 9 个：
+`scripts/patch-all.js` 按以下顺序执行 7 个补丁：
 
 | 补丁 | 作用 |
 |---|---|
 | `patch-sunset.js` | **关闭启动强制更新门控**。Statsig gate `2929582856` 为真时会盖全屏 "Update required" 遮罩，UI 完全不可用。缺失此补丁软件打不开。 |
 | `patch-proxy.js` | **网络代理支持**（见下方专节）。上游忽略 `[network]` 配置段，此补丁让一份配置同时驱动 Chromium 层与子进程层。 |
-| `patch-gpu.js` | Intel 集显 Mac（x64）强制使用独显，修复 Chromium 合成器的渲染异常。 |
 | `patch-i18n.js` | 强制启用多语言，把 Statsig layer 的 `enable_i18n` 写死为 true，避免服务端下发关闭。 |
-| `patch-devtools.js` | 强制开启 DevTools 与元素检查。 |
-| `patch-plugin-auth.js` | 解除功能门控：`browserPane` / `computerUse` / `control` / `multiWindow` 等默认关闭的特性改为开启；绕过 bundled 插件的 `isAvailable` 过滤与 browser-use 原生管道的代码签名校验。 |
-| `patch-updater.js` | 关闭自动更新，防止补丁产物被官方更新覆盖。 |
-| `patch-websearch-mcp.js` | 让 `web_search` 对第三方 provider 的模型生效。上游在渲染层 `Crn()` 设了三道门控（`model_provider !== "openai"`、模型名不以 `gpt-` 开头、配了 `model_catalog_json`），配了第三方 API 后三道全中导致 web_search 失效。 |
+| `patch-devtools.js` | 强制开启应用配置对象中的 DevTools 与元素检查（不改写日志/遥测对象）。 |
+| `patch-plugin-auth.js` | 解除功能门控：`browserPane` / `computerUse` / `control` / `multiWindow` 等默认关闭的特性改为开启；绕过 bundled 插件的 `isAvailable` 过滤、browser-use 原生管道的代码签名校验，以及 `browser_use` / `browser_use_external` / `computer_use` availability hook 里的 Statsig gate（26.1013+ 已移入 `app-initial-*.js`）。 |
+| `patch-updater.js` | 关闭自动更新，防止补丁产物被官方更新覆盖。方法体形状变化时会直接报错，不再静默跳过。 |
+| `patch-websearch-mcp.js` | 让 `web_search` 对第三方 provider 的模型生效。上游在渲染层 `Crn()` 设了三道门控（`model_provider !== "openai"`、模型名不以 `gpt-` 开头、配了 `model_catalog_json`），配了第三方 API 后三道全中导致 web_search 失效。三个门控各自独立打标记，允许修复半补丁状态。 |
+
+`patch-gpu.js` 仅适用于 Intel Mac（x64），不在 `patch-all` 中，需要单独执行。
 
 `patch-util.js` 是共享的 bundle 定位工具，`patch-report.js` 生成本地补丁报告。
 
 ### 实现方式
 
-补丁分两类：
+补丁分三类：
 
-- **AST 定位**（`sunset` / `devtools` / `updater` / `gpu`）—— 用 acorn 解析后按 `node.start/end` 替换，上游重新打包导致变量名变化时仍能正确定位。replacement 与原文等长（`!0` / `!1`），偏移不会错位。
-- **锚点字符串替换**（`proxy` / `i18n` / `plugin-auth` / `websearch-mcp`）—— 依赖上游代码里的唯一锚点。
+- **AST 定位**（`sunset` / `i18n` / `devtools` / `plugin-auth` / `updater`）—— 用 acorn 解析后按 `node.start/end` 定位；替换按偏移从后往前应用，replacement 长度可以与原文不同（当前主要是 `!0` / `!1`）。
+- **锚点字符串替换**（`websearch-mcp`）—— 依赖上游代码里的唯一表达式；每个门控有独立幂等标记。
+- **入口注入**（`proxy` / `gpu`）—— 在 `early-bootstrap.js` 或 bootstrap 入口注入代码。proxy 用 AST 定位 `require("electron")` 后插入，gpu 在文件头插入。
 
-所有补丁幂等，重复执行不会叠加。
+所有补丁幂等，重复执行不会叠加。`--check` 是真正的只读模式；关键补丁在 0 命中、锚点失效或方法体形状变化时返回非 0，`patch-all` 会报失败，避免静默产出未打补丁的构建。
 
 ## 网络代理
 
@@ -51,6 +53,8 @@ proxy_server = "127.0.0.1:10809"
 proxy_protocol = "http"          # http | socks5 | socks5h | socks4
 proxy_bypass = ["localhost", "127.0.0.1", "<local>"]
 ```
+
+解析器支持行尾注释、单/双引号字符串和带注释的 `[network]` 头。
 
 两个实现要点：
 
@@ -98,11 +102,17 @@ npm run build:win-x64
 > **不要放在 `Downloads` 目录下运行。** Windows 的受控文件夹访问会限制 Chromium
 > 沙箱子进程的文件操作，表现为启动后卡在「无法加载组织设置」。
 
-宿主二进制是 `ChatGPT.exe`（不是 20KB 的 `Codex.exe` launcher），asar 完整性哈希写在它的内嵌清单里，构建时会自动同步。
+宿主二进制是 `ChatGPT.exe`（不是 20KB 的 `Codex.exe` launcher），asar 完整性哈希写在它的内嵌清单里。构建时会保留上一次产物中带清单的宿主 exe，并把清单 hash 同步到新 asar；MSIX 缓存里的 exe 可能没有清单，若从头构建时找不到任何带清单的 exe，构建会直接失败，而不是产出无法加载的包。
+
+关键补丁未命中时补丁步骤会返回失败。可以先用只读检查确认命中情况：
+
+```bash
+node scripts/patch-all.js win --check
+```
 
 ## 说明
 
 - 本项目与 OpenAI 无关，是其桌面端客户端的第三方修改版。
 - `scripts/certs/` 下是微软公开发布的根 CA 证书（纯公钥，无私钥），用于校验 MSIX 签名。
-- `scripts/STATSIG_GATES.md` 记录从客户端 bundle 提取的 Statsig gate ID 映射，是补丁的依据。
-- 补丁面向跨平台共用逻辑（AST 改写），macOS / Linux 走同样的流程；目前仅在 Windows x64 上实测。
+- `scripts/STATSIG_GATES.md` 记录历史 Statsig gate 列表和当前 availability gate，是补丁的依据之一。
+- 补丁面向跨平台共用逻辑（AST 改写），macOS / Windows 走同样的流程；目前仅在 Windows x64 上实测。Linux 构建脚本存在，但补丁脚本的平台目录列表尚未包含 Linux，需要额外适配。

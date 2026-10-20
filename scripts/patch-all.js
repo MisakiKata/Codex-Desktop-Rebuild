@@ -3,8 +3,9 @@
  * Run all patch scripts in sequence.
  *
  * Usage:
- *   node scripts/patch-all.js              # Patch both platforms
- *   node scripts/patch-all.js unix         # Patch unix only
+ *   node scripts/patch-all.js              # Patch every platform found in src/
+ *   node scripts/patch-all.js mac-arm64    # Patch macOS arm64 only
+ *   node scripts/patch-all.js mac-x64      # Patch macOS x64 only
  *   node scripts/patch-all.js win          # Patch win only
  *   node scripts/patch-all.js --check      # Dry-run all
  */
@@ -32,9 +33,20 @@ const PATCHES = [
   //   patch-archive-delete.js superseded by the official delete-thread-dialog
 ];
 
+const PLATFORMS = ["mac-arm64", "mac-x64", "win"];
+
 function main() {
   const args = process.argv.slice(2);
-  const platform = args.find((a) => ["mac-arm64", "mac-x64", "win", "unix"].includes(a));
+  const positional = args.filter((a) => !a.startsWith("--"));
+  if (positional.length > 1) {
+    console.error(`[x] expected at most one platform, got: ${positional.join(" ")}`);
+    process.exit(2);
+  }
+  const platform = positional[0];
+  if (platform && !PLATFORMS.includes(platform)) {
+    console.error(`[x] unknown platform "${platform}" (expected: ${PLATFORMS.join(", ")})`);
+    process.exit(2);
+  }
   const extra = args.filter((a) => a.startsWith("--"));
   const passArgs = [...(platform ? [platform] : []), ...extra];
 
