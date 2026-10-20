@@ -1,0 +1,167 @@
+# ============================================================================
+# 第三方 API 配置模板（DeepSeek 为例）
+#
+# 模型清单走上游原生的 model_catalog_json，不需要补丁。
+# 只有 web_search 的 MCP 上下文需要 patch-websearch-mcp.js 补丁
+# （上游把它锁死在官方模型上，见 README「web_search 对第三方模型生效」）。
+#
+# 两个文件各管一半：
+#   ~/.codex/config.toml      provider 定义 + 顶层开关 + catalog 路径
+#   ~/.codex/model-catalog.json   模型清单（app-server 强校验 schema）
+#   ~/.codex/<name>.config.toml   profile，只有 CLI 用
+# ============================================================================
+
+
+# ----------------------------------------------------------------------------
+# 步骤 1：~/.codex/config.toml
+# ----------------------------------------------------------------------------
+
+model_provider = "deepseek"           # 桌面端必需，见 README「为什么必须设」
+model_catalog_json = "~/.codex/model-catalog.json"
+
+[model_providers.deepseek]
+name = "DeepSeek"
+base_url = "https://api.deepseek.com"
+wire_api = "responses"
+env_key = "DEEPSEEK_API_KEY"
+
+
+# ----------------------------------------------------------------------------
+# 步骤 2：~/.codex/model-catalog.json
+# ----------------------------------------------------------------------------
+#
+# app-server 逐字段校验，缺一个就报 missing field 且整个 CLI 起不来。
+# 下面是完整可用的条目，照抄即可。
+
+{
+  "models": [
+    {
+      "slug": "deepseek-flash",
+      "display_name": "DeepSeek Flash",
+      "description": "Fast, cost-efficient model for everyday tasks",
+      "supported_reasoning_levels": [
+        { "effort": "low", "description": "Fast responses with lighter reasoning" },
+        { "effort": "medium", "description": "Balances speed and reasoning depth" },
+        { "effort": "high", "description": "Greater reasoning depth" }
+      ],
+      "shell_type": "unified_exec",
+      "visibility": "list",
+      "supported_in_api": true,
+      "default_reasoning_level": "medium",
+      "support_verbosity": true,
+      "truncation_policy": { "mode": "tokens", "limit": 1000000 },
+      "experimental_supported_tools": [],
+      "supports_parallel_tool_calls": true,
+      "priority": 90,
+      "base_instructions": "You are a coding assistant."
+    },
+    {
+      "slug": "deepseek-v4-pro",
+      "display_name": "DeepSeek V4 Pro",
+      "description": "Most capable model for complex reasoning",
+      "supported_reasoning_levels": [
+        { "effort": "low", "description": "Fast responses with lighter reasoning" },
+        { "effort": "medium", "description": "Balances speed and reasoning depth" },
+        { "effort": "high", "description": "Greater reasoning depth" }
+      ],
+      "shell_type": "unified_exec",
+      "visibility": "list",
+      "supported_in_api": true,
+      "default_reasoning_level": "medium",
+      "support_verbosity": true,
+      "truncation_policy": { "mode": "tokens", "limit": 1000000 },
+      "experimental_supported_tools": [],
+      "supports_parallel_tool_calls": true,
+      "priority": 91,
+      "base_instructions": "You are a coding assistant."
+    }
+  ]
+}
+
+
+# ----------------------------------------------------------------------------
+# 步骤 3：~/.codex/ds.config.toml（profile，只有 CLI 用）
+# ----------------------------------------------------------------------------
+#
+# provider 定义和 model 选哪个必须分开放。写进 provider 段下会被忽略：
+#     `model_providers.deepseek.model` is ignored.
+
+model_provider = "deepseek"
+model = "deepseek-flash"
+
+
+# ----------------------------------------------------------------------------
+# 步骤 4：设置 API key
+# ----------------------------------------------------------------------------
+#
+# 只能走环境变量。api_key 字段不被支持：
+#     `model_providers.deepseek.api_key` is ignored.
+#
+# env_key 的值是「环境变量的名字」，不是 key 本身。填错会报：
+#     ERROR: Missing environment variable: sk-xxxxx
+
+[Environment]::SetEnvironmentVariable("DEEPSEEK_API_KEY", "sk-你的key", "User")
+
+
+# ----------------------------------------------------------------------------
+# 用法
+# ----------------------------------------------------------------------------
+
+codex                    # 官方 ChatGPT 登录（不配 model_provider 时）
+codex -p ds              # DeepSeek flash
+codex -p ds -m deepseek-v4-pro
+
+
+# ----------------------------------------------------------------------------
+# catalog 字段速查
+# ----------------------------------------------------------------------------
+
+# slug                  模型 ID，请求时用它
+# display_name          UI 显示名
+# description           UI 描述
+# supported_reasoning_levels  可选的 reasoning effort，每项 {effort, description}
+# default_reasoning_level     默认 effort
+# shell_type            "unified_exec"
+# visibility            "list" 才出现在选择器；"hide" 则隐藏
+# supported_in_api      true
+# support_verbosity     true
+# truncation_policy     {"mode":"tokens","limit":N}  mode 只能是 tokens / bytes
+# experimental_supported_tools   []
+# supports_parallel_tool_calls   true
+# priority              数字，越大越靠前（仅在同一 catalog 内排序）
+# base_instructions     系统提示词，必填（或 model_messages.instructions_template）
+
+
+# ----------------------------------------------------------------------------
+# 加新 provider
+# ----------------------------------------------------------------------------
+#
+# 1. config.toml 加一段 [model_providers.xxx]（name / base_url / wire_api / env_key）
+# 2. model-catalog.json 的 models 数组里加条目
+# 3. 设对应的环境变量
+# 4. 想在 CLI 用快捷切换，再建个 ~/.codex/<短名>.config.toml
+
+
+# ----------------------------------------------------------------------------
+# 常见错误对照
+# ----------------------------------------------------------------------------
+
+# missing field 'xxx'
+#   → catalog 条目缺字段，照上面的速查表补
+#
+# invalid type: string "none", expected struct TruncationPolicyConfig
+#   → truncation_policy 是对象不是字符串，且 mode 只能用 tokens / bytes
+#
+# model 'xxx' is missing both `base_instructions` and
+# `model_messages.instructions_template`
+#   → 必须给系统提示词
+#
+# ERROR: Missing environment variable: sk-xxxxx
+#   → env_key 被填成了 key 本身，它要的是环境变量名
+#
+# The 'xxx' model is not supported when using Codex with a ChatGPT account.
+#   → 顶层缺 model_provider，被强制走官方通道了
+#
+# `model_providers.xxx.models` is ignored
+#   → 不要在 provider 段里写模型清单，config/read 会过滤自定义字段，
+#     只能走 model_catalog_json
